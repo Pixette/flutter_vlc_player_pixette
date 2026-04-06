@@ -490,7 +490,7 @@ class VLCPlayerEventStreamHandler: NSObject, FlutterStreamHandler, VLCMediaPlaye
         ])
     }
 
-    func mediaPlayer(_ player: VLCMediaPlayer, recordingStoppedAtURL url: URL?) {
+    func mediaPlayer(_ player: VLCMediaPlayer, recordingStoppedAt url: URL?) {
         guard let mediaEventSink = self.mediaEventSink else { return }
 
         mediaEventSink([
