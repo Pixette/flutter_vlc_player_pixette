@@ -383,12 +383,15 @@ class VLCRendererEventStreamHandler: NSObject, FlutterStreamHandler, VLCRenderer
     func rendererDiscovererItemAdded(_ rendererDiscoverer: VLCRendererDiscoverer, item: VLCRendererItem) {
         self.renderItems.append(item)
 
-        guard let rendererEventSink = self.rendererEventSink else { return }
-        rendererEventSink([
-            "event": "attached",
-            "id": item.name,
-            "name": item.name,
-        ])
+        let name = item.name
+        DispatchQueue.main.async { [weak self] in
+            guard let rendererEventSink = self?.rendererEventSink else { return }
+            rendererEventSink([
+                "event": "attached",
+                "id": name,
+                "name": name,
+            ])
+        }
     }
 
     func rendererDiscovererItemDeleted(_ rendererDiscoverer: VLCRendererDiscoverer, item: VLCRendererItem) {
@@ -396,12 +399,15 @@ class VLCRendererEventStreamHandler: NSObject, FlutterStreamHandler, VLCRenderer
             self.renderItems.remove(at: index)
         }
 
-        guard let rendererEventSink = self.rendererEventSink else { return }
-        rendererEventSink([
-            "event": "detached",
-            "id": item.name,
-            "name": item.name,
-        ])
+        let name = item.name
+        DispatchQueue.main.async { [weak self] in
+            guard let rendererEventSink = self?.rendererEventSink else { return }
+            rendererEventSink([
+                "event": "detached",
+                "id": name,
+                "name": name,
+            ])
+        }
     }
 }
 
@@ -419,118 +425,128 @@ class VLCPlayerEventStreamHandler: NSObject, FlutterStreamHandler, VLCMediaPlaye
     }
 
     func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
-        guard let mediaEventSink = self.mediaEventSink else { return }
+        // VLCKit 4.0: delegate callbacks fire on VLC's internal thread.
+        // Flutter platform channels require the main thread.
+        DispatchQueue.main.async { [weak self] in
+            guard let mediaEventSink = self?.mediaEventSink else { return }
 
-        // Note: in VLCKit 4.0 we no longer receive the player via notification,
-        // so track counts are not available in state change callbacks.
-        // They are reported in mediaPlayerTimeChanged instead.
+            switch newState {
+            case .opening:
+                mediaEventSink([
+                    "event": "opening",
+                ])
 
-        switch newState {
-        case .opening:
-            mediaEventSink([
-                "event": "opening",
-            ])
+            case .paused:
+                mediaEventSink([
+                    "event": "paused",
+                ])
 
-        case .paused:
-            mediaEventSink([
-                "event": "paused",
-            ])
+            case .stopped, .stopping:
+                mediaEventSink([
+                    "event": "stopped",
+                ])
 
-        case .stopped, .stopping:
-            mediaEventSink([
-                "event": "stopped",
-            ])
+            case .playing:
+                mediaEventSink([
+                    "event": "playing",
+                    "height": 0,
+                    "width": 0,
+                    "speed": 1,
+                    "duration": 0,
+                    "audioTracksCount": 0,
+                    "activeAudioTrack": 0,
+                    "spuTracksCount": 0,
+                    "activeSpuTrack": 0,
+                ])
 
-        case .playing:
-            mediaEventSink([
-                "event": "playing",
-                "height": 0,
-                "width": 0,
-                "speed": 1,
-                "duration": 0,
-                "audioTracksCount": 0,
-                "activeAudioTrack": 0,
-                "spuTracksCount": 0,
-                "activeSpuTrack": 0,
-            ])
+            case .buffering:
+                mediaEventSink([
+                    "event": "timeChanged",
+                    "height": 0,
+                    "width": 0,
+                    "speed": 1,
+                    "duration": 0,
+                    "position": 0,
+                    "buffer": 100.0,
+                    "audioTracksCount": 0,
+                    "activeAudioTrack": 0,
+                    "spuTracksCount": 0,
+                    "activeSpuTrack": 0,
+                    "isPlaying": false,
+                ])
 
-        case .buffering:
-            mediaEventSink([
-                "event": "timeChanged",
-                "height": 0,
-                "width": 0,
-                "speed": 1,
-                "duration": 0,
-                "position": 0,
-                "buffer": 100.0,
-                "audioTracksCount": 0,
-                "activeAudioTrack": 0,
-                "spuTracksCount": 0,
-                "activeSpuTrack": 0,
-                "isPlaying": false,
-            ])
+            case .error:
+                mediaEventSink([
+                    "event": "error",
+                ])
 
-        case .error:
-            mediaEventSink([
-                "event": "error",
-            ])
-
-        @unknown default:
-            break
+            @unknown default:
+                break
+            }
         }
     }
 
     func mediaPlayerStartedRecording(_ player: VLCMediaPlayer) {
-        guard let mediaEventSink = self.mediaEventSink else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let mediaEventSink = self?.mediaEventSink else { return }
 
-        mediaEventSink([
-            "event": "recording",
-            "isRecording": true,
-            "recordPath": "",
-        ])
+            mediaEventSink([
+                "event": "recording",
+                "isRecording": true,
+                "recordPath": "",
+            ])
+        }
     }
 
     func mediaPlayer(_ player: VLCMediaPlayer, recordingStoppedAt url: URL?) {
-        guard let mediaEventSink = self.mediaEventSink else { return }
+        let path = url?.path ?? ""
+        DispatchQueue.main.async { [weak self] in
+            guard let mediaEventSink = self?.mediaEventSink else { return }
 
-        mediaEventSink([
-            "event": "recording",
-            "isRecording": false,
-            "recordPath": url?.path ?? "",
-        ])
+            mediaEventSink([
+                "event": "recording",
+                "isRecording": false,
+                "recordPath": path,
+            ])
+        }
     }
 
     func mediaPlayerTimeChanged(_ aNotification: Notification) {
-        guard let mediaEventSink = self.mediaEventSink else { return }
-
+        // VLCKit 4.0: this callback fires on VLC's internal thread with
+        // timer.lock held. Accessing player properties here causes a mutex
+        // assertion (vlc_player_Lock requires timer.lock NOT held).
+        // Dispatch to main thread for both property access and event sink.
         let player = aNotification.object as? VLCMediaPlayer
-        //
-        let height = player?.videoSize.height ?? 0
-        let width = player?.videoSize.width ?? 0
-        let speed = player?.rate ?? 1
-        let duration = player?.media?.length.value ?? 0
-        let audioTracksCount = Int32(player?.audioTracks.count ?? 0)
-        let activeAudioTrack = player?.selectedAudioTrackIndex() ?? -1
-        let spuTracksCount = Int32(player?.textTracks.count ?? 0)
-        let activeSpuTrack = player?.selectedTextTrackIndex() ?? -1
-        let buffering = 100.0
-        let isPlaying = player?.isPlaying ?? false
-        //
-        if let position = player?.time.value {
-            mediaEventSink([
-                "event": "timeChanged",
-                "height": height,
-                "width": width,
-                "speed": speed,
-                "duration": duration,
-                "position": position,
-                "buffer": buffering,
-                "audioTracksCount": audioTracksCount,
-                "activeAudioTrack": activeAudioTrack,
-                "spuTracksCount": spuTracksCount,
-                "activeSpuTrack": activeSpuTrack,
-                "isPlaying": isPlaying,
-            ])
+        DispatchQueue.main.async { [weak self] in
+            guard let mediaEventSink = self?.mediaEventSink else { return }
+
+            let height = player?.videoSize.height ?? 0
+            let width = player?.videoSize.width ?? 0
+            let speed = player?.rate ?? 1
+            let duration = player?.media?.length.value ?? 0
+            let audioTracksCount = Int32(player?.audioTracks.count ?? 0)
+            let activeAudioTrack = player?.selectedAudioTrackIndex() ?? -1
+            let spuTracksCount = Int32(player?.textTracks.count ?? 0)
+            let activeSpuTrack = player?.selectedTextTrackIndex() ?? -1
+            let buffering = 100.0
+            let isPlaying = player?.isPlaying ?? false
+
+            if let position = player?.time.value {
+                mediaEventSink([
+                    "event": "timeChanged",
+                    "height": height,
+                    "width": width,
+                    "speed": speed,
+                    "duration": duration,
+                    "position": position,
+                    "buffer": buffering,
+                    "audioTracksCount": audioTracksCount,
+                    "activeAudioTrack": activeAudioTrack,
+                    "spuTracksCount": spuTracksCount,
+                    "activeSpuTrack": activeSpuTrack,
+                    "isPlaying": isPlaying,
+                ])
+            }
         }
     }
 }
