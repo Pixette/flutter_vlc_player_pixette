@@ -50,7 +50,7 @@ android {
     dependencies {
         testImplementation("org.jetbrains.kotlin:kotlin-test")
         testImplementation("org.mockito:mockito-core:5.0.0")
-        implementation 'org.videolan.android:libvlc-all:4.0.0-eap21'
+        implementation 'org.videolan.android:libvlc-all:4.0.0-eap24'
         implementation 'androidx.appcompat:appcompat:1.7.0'
         implementation 'androidx.legacy:legacy-support-v4:1.0.0'
         implementation 'androidx.annotation:annotation:1.9.1'

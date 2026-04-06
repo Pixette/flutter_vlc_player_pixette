@@ -1,6 +1,6 @@
 import Flutter
 import Foundation
-import MobileVLCKit
+import VLCKit
 import UIKit
 
 public class VLCViewController: NSObject, FlutterPlatformView {
