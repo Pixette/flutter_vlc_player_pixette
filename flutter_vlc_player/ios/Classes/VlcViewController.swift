@@ -26,7 +26,10 @@ public class VLCViewController: NSObject, FlutterPlatformView {
             binaryMessenger: messenger
         )
 
-        self.hostedView = UIView(frame: frame)
+        // VLCKit 4.0 calls addSubview: on the drawable to add its rendering
+        // view. Use a subclass that ensures the rendering view always fills
+        // the parent when Flutter resizes the platform view.
+        self.hostedView = VLCHostView(frame: frame)
         self.vlcMediaPlayer = VLCMediaPlayer()
         self.mediaEventChannel = mediaEventChannel
         self.mediaEventChannelHandler = VLCPlayerEventStreamHandler()
@@ -35,7 +38,9 @@ public class VLCViewController: NSObject, FlutterPlatformView {
         //
         self.mediaEventChannel.setStreamHandler(self.mediaEventChannelHandler)
         self.rendererEventChannel.setStreamHandler(self.rendererEventChannelHandler)
-        self.vlcMediaPlayer.drawable = self.hostedView
+        // Defer setting drawable until setMediaPlayerUrl, so the view has
+        // been laid out by Flutter and has non-zero bounds for VLCKit 4.0's
+        // rendering subview.
         self.vlcMediaPlayer.delegate = self.mediaEventChannelHandler
     }
 
@@ -358,6 +363,12 @@ public class VLCViewController: NSObject, FlutterPlatformView {
             break
         }
 
+        // Set drawable now (deferred from init) so VLCKit 4.0 creates its
+        // rendering subview with the view's actual laid-out bounds.
+        if self.vlcMediaPlayer.drawable == nil {
+            self.vlcMediaPlayer.drawable = self.hostedView
+        }
+
         self.vlcMediaPlayer.media = media
         self.vlcMediaPlayer.play()
         if !autoPlay {
@@ -547,6 +558,20 @@ class VLCPlayerEventStreamHandler: NSObject, FlutterStreamHandler, VLCMediaPlaye
                     "isPlaying": isPlaying,
                 ])
             }
+        }
+    }
+}
+
+/// UIView subclass that ensures VLCKit 4.0's rendering subview always fills
+/// the parent. VLCKit 4.0 calls addSubview: on the drawable to insert its
+/// own video output view, but does not set autoresizing masks. When Flutter
+/// resizes the platform view, the rendering subview would stay at its
+/// initial (possibly zero) size, causing a black screen.
+class VLCHostView: UIView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        for subview in subviews {
+            subview.frame = bounds
         }
     }
 }
