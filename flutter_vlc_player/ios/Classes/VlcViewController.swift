@@ -118,7 +118,7 @@ public class VLCViewController: NSObject, FlutterPlatformView {
         if index == -1 {
             self.vlcMediaPlayer.deselectAllTextTracks()
         } else if index >= 0 && index < tracks.count {
-            tracks[index].selectedExclusively = true
+            tracks[index].isSelectedExclusively = true
         }
     }
 
@@ -166,7 +166,7 @@ public class VLCViewController: NSObject, FlutterPlatformView {
         if index == -1 {
             self.vlcMediaPlayer.deselectAllAudioTracks()
         } else if index >= 0 && index < tracks.count {
-            tracks[index].selectedExclusively = true
+            tracks[index].isSelectedExclusively = true
         }
     }
 
@@ -212,7 +212,7 @@ public class VLCViewController: NSObject, FlutterPlatformView {
         if index == -1 {
             self.vlcMediaPlayer.deselectAllVideoTracks()
         } else if index >= 0 && index < tracks.count {
-            tracks[index].selectedExclusively = true
+            tracks[index].isSelectedExclusively = true
         }
     }
 
