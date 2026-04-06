@@ -3,7 +3,7 @@
 # Run `pod lib lint flutter_vlc_player.podspec' to validate before publishing.
 #
 Pod::Spec.new do |s|
-  s.name             = 'flutter_vlc_player_16kb'
+  s.name             = 'flutter_vlc_player_pixette'
   s.version          = '3.0.3'
   s.summary          = 'VLC-powered video player for Flutter (16kb page size fix).'
   s.description      = 'Supports multiple players on one screen.'

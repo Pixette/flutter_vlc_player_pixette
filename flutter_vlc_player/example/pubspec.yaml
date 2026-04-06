@@ -11,7 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
 
-  flutter_vlc_player_16kb:
+  flutter_vlc_player_pixette:
     path: ../
 
   path_provider: ^2.1.5
