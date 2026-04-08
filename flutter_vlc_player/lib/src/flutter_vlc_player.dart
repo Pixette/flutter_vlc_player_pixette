@@ -67,17 +67,16 @@ class _VlcPlayerState extends State<VlcPlayer> {
       aspectRatio: widget.aspectRatio,
       child: Stack(
         children: <Widget>[
-          Offstage(
-            offstage: _isInitialized,
-            child: widget.placeholder ?? Container(),
+          // Platform view must always be fully composited (no Opacity(0) or
+          // Offstage) so the native UIView gets real bounds from Flutter's
+          // compositor. VLCKit 4.0 needs non-zero bounds to start playback.
+          vlcPlayerPlatform.buildView(
+            widget.controller.onPlatformViewCreated,
+            virtualDisplay: widget.virtualDisplay,
           ),
-          Offstage(
-            offstage: !_isInitialized,
-            child: vlcPlayerPlatform.buildView(
-              widget.controller.onPlatformViewCreated,
-              virtualDisplay: widget.virtualDisplay,
-            ),
-          ),
+          // Placeholder overlays the platform view until initialized.
+          if (!_isInitialized)
+            widget.placeholder ?? Container(),
         ],
       ),
     );

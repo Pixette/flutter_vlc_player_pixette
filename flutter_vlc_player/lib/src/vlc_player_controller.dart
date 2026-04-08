@@ -235,8 +235,13 @@ class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
             isPlaying: true,
             isBuffering: false,
             playingState: PlayingState.playing,
-            duration: event.duration,
-            size: event.size,
+            duration: (event.duration != null &&
+                    event.duration != Duration.zero)
+                ? event.duration
+                : value.duration,
+            size: (event.size != null && event.size != Size.zero)
+                ? event.size
+                : value.size,
             playbackSpeed: event.playbackSpeed,
             audioTracksCount: event.audioTracksCount,
             activeAudioTrack: event.activeAudioTrack,
@@ -259,10 +264,15 @@ class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
             isEnded: false,
             isBuffering: event.mediaEventType == VlcMediaEventType.buffering,
             position: event.position,
-            duration: event.duration,
+            duration: (event.duration != null &&
+                    event.duration != Duration.zero)
+                ? event.duration
+                : value.duration,
             playbackSpeed: event.playbackSpeed,
             bufferPercent: event.bufferPercent,
-            size: event.size,
+            size: (event.size != null && event.size != Size.zero)
+                ? event.size
+                : value.size,
             audioTracksCount: event.audioTracksCount,
             activeAudioTrack: event.activeAudioTrack,
             spuTracksCount: event.spuTracksCount,
