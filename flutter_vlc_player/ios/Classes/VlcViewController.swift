@@ -101,16 +101,12 @@ public class VLCViewController: NSObject, FlutterPlatformView {
     }
 
     public func takeSnapshot() -> String? {
-        let drawable: UIView = self.vlcMediaPlayer.drawable as! UIView
-        let size = drawable.frame.size
-        UIGraphicsBeginImageContextWithOptions(size, _: false, _: 0.0)
-        let rec = drawable.frame
-        drawable.drawHierarchy(in: rec, afterScreenUpdates: false)
-        let image = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-        let byteArray = (image ?? UIImage()).pngData()
-        //
-        return byteArray?.base64EncodedString()
+        guard let drawable = self.vlcMediaPlayer.drawable as? UIView else { return nil }
+        let renderer = UIGraphicsImageRenderer(size: drawable.frame.size)
+        let image = renderer.image { _ in
+            drawable.drawHierarchy(in: drawable.bounds, afterScreenUpdates: false)
+        }
+        return image.pngData()?.base64EncodedString()
     }
 
     public var spuTracksCount: Int32 {
@@ -314,6 +310,7 @@ public class VLCViewController: NSObject, FlutterPlatformView {
     }
 
     public func dispose() {
+        (self.hostedView as? VLCHostView)?.onFirstLayout = nil
         self.mediaEventChannel.setStreamHandler(nil)
         self.rendererEventChannel.setStreamHandler(nil)
         self.rendererdiscoverers.removeAll()
@@ -322,8 +319,6 @@ public class VLCViewController: NSObject, FlutterPlatformView {
     }
 
     func setMediaPlayerUrl(uri: String, isAssetUrl: Bool, autoPlay: Bool, hwAcc: Int, options: [String]) {
-        NSLog("[VLC4-DEBUG] setMediaPlayerUrl called: uri=\(uri), isAsset=\(isAssetUrl), autoPlay=\(autoPlay), hwAcc=\(hwAcc)")
-        NSLog("[VLC4-DEBUG] options: \(options)")
         self.vlcMediaPlayer.stop()
 
         var media: VLCMedia
@@ -331,53 +326,60 @@ public class VLCViewController: NSObject, FlutterPlatformView {
             guard let path = Bundle.main.path(forResource: uri, ofType: nil),
                   let m = VLCMedia(path: path)
             else {
-                NSLog("[VLC4-DEBUG] FAILED: asset not found for uri=\(uri)")
                 return
             }
             media = m
-            NSLog("[VLC4-DEBUG] Asset media created from path: \(path)")
         }
         else {
             guard let url = URL(string: uri) else {
-                NSLog("[VLC4-DEBUG] FAILED: invalid URL string: \(uri)")
                 return
             }
             guard let m = VLCMedia(url: url) else {
-                NSLog("[VLC4-DEBUG] FAILED: VLCMedia(url:) returned nil for: \(url)")
                 return
             }
             media = m
-            NSLog("[VLC4-DEBUG] URL media created from: \(url)")
+        }
+
+        // VLCKit 4.0 strictly distinguishes global libvlc options ("--foo=bar")
+        // from per-media options (":foo=bar"). VLCMedia.addOption() takes the
+        // per-media form, so any "--" prefix is silently dropped. On VLCKit
+        // 3.6.x this was lenient; on 4.0.0a18 it isn't, which means options
+        // like --avcodec-hw=none never reached the decoder and VideoToolbox
+        // re-engaged on streams that should have stayed software-decoded
+        // (interlaced H.264 → "buffer deadlock prevented" → black frames
+        // even though playback "progressed"). Normalize every option to the
+        // ":"-prefixed form before handing it to VLCMedia.
+        func normalizeOption(_ raw: String) -> String {
+            var s = raw
+            if s.hasPrefix("--") {
+                s = String(s.dropFirst(2))
+            }
+            if !s.hasPrefix(":") {
+                s = ":" + s
+            }
+            return s
         }
 
         if !options.isEmpty {
             for option in options {
-                media.addOption(option)
-                NSLog("[VLC4-DEBUG] Added option: \(option)")
+                media.addOption(normalizeOption(option))
             }
         }
 
         switch HWAccellerationType(rawValue: hwAcc) {
         case .HW_ACCELERATION_DISABLED:
-            media.addOption("--codec=avcodec")
-            NSLog("[VLC4-DEBUG] HW accel: DISABLED")
+            media.addOption(":codec=avcodec")
+            media.addOption(":avcodec-hw=none")
 
         case .HW_ACCELERATION_DECODING:
-            media.addOption("--codec=all")
+            media.addOption(":codec=all")
             media.addOption(":no-mediacodec-dr")
             media.addOption(":no-omxil-dr")
-            NSLog("[VLC4-DEBUG] HW accel: DECODING")
 
         case .HW_ACCELERATION_FULL:
-            media.addOption("--codec=all")
-            NSLog("[VLC4-DEBUG] HW accel: FULL")
+            media.addOption(":codec=all")
 
-        case .HW_ACCELERATION_AUTOMATIC:
-            NSLog("[VLC4-DEBUG] HW accel: AUTOMATIC")
-            break
-
-        case .none:
-            NSLog("[VLC4-DEBUG] HW accel: none (unknown value)")
+        case .HW_ACCELERATION_AUTOMATIC, .none:
             break
         }
 
@@ -391,22 +393,20 @@ public class VLCViewController: NSObject, FlutterPlatformView {
         // VLCHostView.layoutSubviews fires with non-zero bounds.
         let startPlayback = { [weak self] in
             guard let self = self else { return }
+            // Defensive: clear any pending deferred-layout callback so a second
+            // setMediaPlayerUrl call can't re-arm and run this twice.
+            (self.hostedView as? VLCHostView)?.onFirstLayout = nil
             if self.vlcMediaPlayer.drawable == nil {
                 self.vlcMediaPlayer.drawable = self.hostedView
-                NSLog("[VLC4-DEBUG] Drawable set to hostedView (frame=\(self.hostedView.frame))")
             }
-            NSLog("[VLC4-DEBUG] Setting media and calling play()...")
             self.vlcMediaPlayer.media = media
             self.vlcMediaPlayer.play()
-            NSLog("[VLC4-DEBUG] play() called, isPlaying=\(self.vlcMediaPlayer.isPlaying)")
             if !autoPlay {
                 self.vlcMediaPlayer.stop()
-                NSLog("[VLC4-DEBUG] autoPlay=false, stopped immediately")
             }
         }
 
         if self.hostedView.bounds.size == .zero {
-            NSLog("[VLC4-DEBUG] View has zero bounds, deferring drawable + play until layout...")
             (self.hostedView as? VLCHostView)?.onFirstLayout = startPlayback
         } else {
             startPlayback()
@@ -473,8 +473,21 @@ class VLCPlayerEventStreamHandler: NSObject, FlutterStreamHandler, VLCMediaPlaye
         return nil
     }
 
+    /// Builds the common player status dictionary shared by playing, buffering, and timeChanged events.
+    private func buildPlayerStatusDict(from player: VLCMediaPlayer?) -> [String: Any] {
+        return [
+            "height": player?.videoSize.height ?? 0,
+            "width": player?.videoSize.width ?? 0,
+            "speed": player?.rate ?? 1,
+            "duration": player?.media?.length.value ?? 0,
+            "audioTracksCount": Int32(player?.audioTracks.count ?? 0),
+            "activeAudioTrack": player?.selectedAudioTrackIndex() ?? -1,
+            "spuTracksCount": Int32(player?.textTracks.count ?? 0),
+            "activeSpuTrack": player?.selectedTextTrackIndex() ?? -1,
+        ]
+    }
+
     func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
-        NSLog("[VLC4-DEBUG] State changed: \(newState.rawValue) (0=opening,1=buffering,2=playing,3=paused,4=stopped,5=stopping,6=error)")
         // VLCKit 4.0: delegate callbacks fire on VLC's internal thread.
         // Flutter platform channels require the main thread.
         DispatchQueue.main.async { [weak self] in
@@ -497,51 +510,18 @@ class VLCPlayerEventStreamHandler: NSObject, FlutterStreamHandler, VLCMediaPlaye
                 ])
 
             case .playing:
-                let player = self?.mediaPlayer
-                let height = player?.videoSize.height ?? 0
-                let width = player?.videoSize.width ?? 0
-                let speed = player?.rate ?? 1
-                let duration = player?.media?.length.value ?? 0
-                let audioTracksCount = Int32(player?.audioTracks.count ?? 0)
-                let activeAudioTrack = player?.selectedAudioTrackIndex() ?? -1
-                let spuTracksCount = Int32(player?.textTracks.count ?? 0)
-                let activeSpuTrack = player?.selectedTextTrackIndex() ?? -1
-                mediaEventSink([
-                    "event": "playing",
-                    "height": height,
-                    "width": width,
-                    "speed": speed,
-                    "duration": duration,
-                    "audioTracksCount": audioTracksCount,
-                    "activeAudioTrack": activeAudioTrack,
-                    "spuTracksCount": spuTracksCount,
-                    "activeSpuTrack": activeSpuTrack,
-                ])
+                var dict = self?.buildPlayerStatusDict(from: self?.mediaPlayer) ?? [:]
+                dict["event"] = "playing"
+                mediaEventSink(dict)
 
             case .buffering:
                 let player = self?.mediaPlayer
-                let height = player?.videoSize.height ?? 0
-                let width = player?.videoSize.width ?? 0
-                let speed = player?.rate ?? 1
-                let duration = player?.media?.length.value ?? 0
-                let audioTracksCount = Int32(player?.audioTracks.count ?? 0)
-                let activeAudioTrack = player?.selectedAudioTrackIndex() ?? -1
-                let spuTracksCount = Int32(player?.textTracks.count ?? 0)
-                let activeSpuTrack = player?.selectedTextTrackIndex() ?? -1
-                mediaEventSink([
-                    "event": "timeChanged",
-                    "height": height,
-                    "width": width,
-                    "speed": speed,
-                    "duration": duration,
-                    "position": 0,
-                    "buffer": 100.0,
-                    "audioTracksCount": audioTracksCount,
-                    "activeAudioTrack": activeAudioTrack,
-                    "spuTracksCount": spuTracksCount,
-                    "activeSpuTrack": activeSpuTrack,
-                    "isPlaying": player?.isPlaying ?? false,
-                ])
+                var dict = self?.buildPlayerStatusDict(from: player) ?? [:]
+                dict["event"] = "timeChanged"
+                dict["position"] = 0
+                dict["buffer"] = 100.0
+                dict["isPlaying"] = player?.isPlaying ?? false
+                mediaEventSink(dict)
 
             case .error:
                 mediaEventSink([
@@ -586,38 +566,15 @@ class VLCPlayerEventStreamHandler: NSObject, FlutterStreamHandler, VLCMediaPlaye
         // Dispatch to main thread for both property access and event sink.
         let player = aNotification.object as? VLCMediaPlayer
         DispatchQueue.main.async { [weak self] in
-            let vSize = player?.videoSize ?? .zero
-            if vSize != .zero {
-                NSLog("[VLC4-DEBUG] timeChanged: videoSize=\(vSize)")
-            }
             guard let mediaEventSink = self?.mediaEventSink else { return }
 
-            let height = player?.videoSize.height ?? 0
-            let width = player?.videoSize.width ?? 0
-            let speed = player?.rate ?? 1
-            let duration = player?.media?.length.value ?? 0
-            let audioTracksCount = Int32(player?.audioTracks.count ?? 0)
-            let activeAudioTrack = player?.selectedAudioTrackIndex() ?? -1
-            let spuTracksCount = Int32(player?.textTracks.count ?? 0)
-            let activeSpuTrack = player?.selectedTextTrackIndex() ?? -1
-            let buffering = 100.0
-            let isPlaying = player?.isPlaying ?? false
-
             if let position = player?.time.value {
-                mediaEventSink([
-                    "event": "timeChanged",
-                    "height": height,
-                    "width": width,
-                    "speed": speed,
-                    "duration": duration,
-                    "position": position,
-                    "buffer": buffering,
-                    "audioTracksCount": audioTracksCount,
-                    "activeAudioTrack": activeAudioTrack,
-                    "spuTracksCount": spuTracksCount,
-                    "activeSpuTrack": activeSpuTrack,
-                    "isPlaying": isPlaying,
-                ])
+                var dict = self?.buildPlayerStatusDict(from: player) ?? [:]
+                dict["event"] = "timeChanged"
+                dict["position"] = position
+                dict["buffer"] = 100.0
+                dict["isPlaying"] = player?.isPlaying ?? false
+                mediaEventSink(dict)
             }
         }
     }
@@ -649,7 +606,6 @@ class VLCHostView: UIView {
             super.frame = newValue
             if newValue.size != .zero, let setup = onFirstLayout {
                 onFirstLayout = nil
-                NSLog("[VLC4-DEBUG] VLCHostView frame set with bounds: \(newValue)")
                 setup()
             }
         }
@@ -660,7 +616,6 @@ class VLCHostView: UIView {
         // Execute deferred drawable setup once we have real bounds.
         if bounds.size != .zero, let setup = onFirstLayout {
             onFirstLayout = nil
-            NSLog("[VLC4-DEBUG] VLCHostView first layout with bounds: \(bounds)")
             setup()
         }
         for subview in subviews {
